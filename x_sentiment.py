@@ -47,7 +47,14 @@ def parse_phase3_file(path: str) -> tuple[list[str], str]:
 
 
 def classify_tweet(text: str) -> int:
-    pass
+    lower = text.lower()
+    is_bullish = any(term in lower for term in BULLISH_TERMS)
+    is_bearish = any(term in lower for term in BEARISH_TERMS)
+    if is_bullish and not is_bearish:
+        return 1
+    if is_bearish and not is_bullish:
+        return -1
+    return 0
 
 
 def compute_rating(tweets: list[dict]) -> tuple[int, int, str]:

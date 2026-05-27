@@ -52,3 +52,30 @@ def test_parse_phase3_skips_blank_lines(tmp_path):
     p.write_text("1\tADAM\n\n2\tASND\n")
     tickers, _ = parse_phase3_file(str(p))
     assert tickers == ["ADAM", "ASND"]
+
+
+# ── classify_tweet ────────────────────────────────────────────────────────────
+
+def test_classify_tweet_bullish():
+    assert classify_tweet("$SBLK is very bullish right now") == 1
+    assert classify_tweet("Strong buy on $URI catalyst") == 1
+    assert classify_tweet("LOADING UP on $ASND before breakout") == 1
+
+
+def test_classify_tweet_bearish():
+    assert classify_tweet("$DVA dumping hard today") == -1
+    assert classify_tweet("bearish on this name, short it") == -1
+    assert classify_tweet("downgrade — breakdown incoming") == -1
+
+
+def test_classify_tweet_neutral_no_keywords():
+    assert classify_tweet("$AAPL reports earnings next week") == 0
+
+
+def test_classify_tweet_mixed_is_neutral():
+    assert classify_tweet("bullish on $URI but also bearish risk") == 0
+
+
+def test_classify_tweet_case_insensitive():
+    assert classify_tweet("BULLISH on $SBLK") == 1
+    assert classify_tweet("BEARISH on $DVA") == -1
