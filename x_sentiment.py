@@ -117,8 +117,67 @@ async def run_sentiment(
     output_dir: str,
     cookies_path: str | None = None,
 ) -> None:
-    pass
+    _cookies_path = cookies_path or COOKIES_PATH
+    if not os.path.exists(_cookies_path):
+        print(
+            f"\n[x_sentiment] Skipped: x_cookies.json not found at {_cookies_path}\n"
+            "  Create it: {\"auth_token\": \"...\", \"ct0\": \"...\"}\n"
+            "  (copy from x.com DevTools → Application → Cookies)"
+        )
+        return
+
+    with open(_cookies_path) as f:
+        cookies = json.load(f)
+
+    tickers, date_str = parse_phase3_file(phase3_path)
+    since_date = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    api = twscrape.API()
+    try:
+        await api.pool.add_account(
+            username="user",
+            password="pass",
+            email="user@example.com",
+            cookies=f"auth_token={cookies['auth_token']}; ct0={cookies['ct0']}",
+        )
+        await api.pool.login_all()
+    except Exception as e:
+        print(f"[x_sentiment] Auth error: {e}")
+        return
+
+    results = []
+    for ticker in tickers:
+        query = (
+            f"${ticker} (bullish OR bearish OR \"strong buy\" OR \"loading up\" "
+            f"OR dumping OR \"big catalyst\") min_faves:50 min_retweets:10 lang:en since:{since_date}"
+        )
+        tweets = []
+        try:
+            async for tweet in api.search(query, limit=50):
+                tweets.append({
+                    "text": tweet.rawContent,
+                    "likes": tweet.likeCount,
+                    "retweets": tweet.retweetCount,
+                })
+        except Exception as e:
+            print(f"  [{ticker}] search error: {e}")
+            results.append({"ticker": ticker, "rating": 0, "tweets": 0, "key_note": f"Error: {e}"})
+            await asyncio.sleep(0.5)
+            continue
+
+        rating, count, key_note = compute_rating(tweets)
+        results.append({"ticker": ticker, "rating": rating, "tweets": count, "key_note": key_note})
+        print(f"  [{ticker}] rating={rating} tweets={count}")
+        await asyncio.sleep(0.5)
+
+    md = build_markdown(results, date_str, tickers)
+    out_path = os.path.join(output_dir, f"X_Sentiment_{date_str}.md")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(out_path, "w") as f:
+        f.write(md)
+    print(f"[x_sentiment] Saved → {out_path}")
 
 
 def main() -> None:
-    pass
+    phase3_path = find_latest_phase3(SCAN_DIR)
+    asyncio.run(run_sentiment(phase3_path, OUTPUT_DIR))

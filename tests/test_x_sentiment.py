@@ -154,3 +154,52 @@ def test_build_markdown_na_for_rating_zero():
     results = [{"ticker": "ERR", "rating": 0, "tweets": 0, "key_note": "Error: timeout"}]
     md = build_markdown(results, "2026-05-27", ["ERR"])
     assert "N/A" in md
+
+
+# ── run_sentiment ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_sentiment_skips_if_no_cookies(tmp_path, capsys):
+    phase3 = tmp_path / "phase3_2026-05-27.txt"
+    phase3.write_text("1\tSBLK\n2\tURI\n3\tADAM\n")
+    output_dir = str(tmp_path / "output")
+    missing_cookies = str(tmp_path / "no_cookies.json")
+
+    await run_sentiment(str(phase3), output_dir, cookies_path=missing_cookies)
+
+    captured = capsys.readouterr()
+    assert "Skipped" in captured.out
+    assert not os.path.exists(output_dir)
+
+
+@pytest.mark.asyncio
+async def test_run_sentiment_writes_markdown(tmp_path):
+    phase3 = tmp_path / "phase3_2026-05-27.txt"
+    phase3.write_text("1\tSBLK\n2\tURI\n3\tADAM\n")
+    output_dir = str(tmp_path / "output")
+
+    cookies_file = tmp_path / "x_cookies.json"
+    cookies_file.write_text(json.dumps({"auth_token": "tok123", "ct0": "ct456"}))
+
+    mock_tweet = MagicMock()
+    mock_tweet.rawContent = "bullish $SBLK strong buy catalyst"
+    mock_tweet.likeCount = 200
+    mock_tweet.retweetCount = 50
+
+    async def mock_search(query, limit=50):
+        for _ in range(5):
+            yield mock_tweet
+
+    mock_api = MagicMock()
+    mock_api.pool.add_account = AsyncMock()
+    mock_api.pool.login_all = AsyncMock()
+    mock_api.search = mock_search
+
+    with patch("x_sentiment.twscrape.API", return_value=mock_api):
+        await run_sentiment(str(phase3), output_dir, cookies_path=str(cookies_file))
+
+    out_file = os.path.join(output_dir, "X_Sentiment_2026-05-27.md")
+    assert os.path.exists(out_file)
+    content = open(out_file).read()
+    assert "date: 2026-05-27" in content
+    assert "SBLK" in content
