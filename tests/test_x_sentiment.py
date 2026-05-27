@@ -123,3 +123,34 @@ def test_compute_rating_key_note_is_highest_engagement():
     assert "Strong buy $X catalyst" in note
     assert "800♥" in note
     assert "200🔁" in note
+
+
+# ── build_markdown ────────────────────────────────────────────────────────────
+
+def _results(*items):
+    return [{"ticker": t, "rating": r, "tweets": 5, "key_note": "note"} for t, r in items]
+
+
+def test_build_markdown_contains_frontmatter():
+    md = build_markdown(_results(("SBLK", 4)), "2026-05-27", ["SBLK"])
+    assert "date: 2026-05-27" in md
+    assert "tickers: SBLK" in md
+
+
+def test_build_markdown_contains_table_header():
+    md = build_markdown(_results(("SBLK", 4)), "2026-05-27", ["SBLK"])
+    assert "| Ticker | Rating | Tweets | Key Note |" in md
+
+
+def test_build_markdown_sorted_by_rating_desc_then_alpha():
+    results = _results(("AAPL", 3), ("SBLK", 5), ("URI", 5), ("DVA", 1))
+    md = build_markdown(results, "2026-05-27", ["AAPL", "SBLK", "URI", "DVA"])
+    lines = [l for l in md.splitlines() if l.startswith("|") and "Ticker" not in l and "---" not in l]
+    tickers_in_order = [l.split("|")[1].strip() for l in lines]
+    assert tickers_in_order == ["SBLK", "URI", "AAPL", "DVA"]
+
+
+def test_build_markdown_na_for_rating_zero():
+    results = [{"ticker": "ERR", "rating": 0, "tweets": 0, "key_note": "Error: timeout"}]
+    md = build_markdown(results, "2026-05-27", ["ERR"])
+    assert "N/A" in md

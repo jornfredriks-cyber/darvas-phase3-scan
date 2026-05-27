@@ -89,7 +89,27 @@ def compute_rating(tweets: list[dict]) -> tuple[int, int, str]:
 
 
 def build_markdown(results: list[dict], date_str: str, tickers: list[str]) -> str:
-    pass
+    sorted_results = sorted(results, key=lambda r: (-r["rating"], r["ticker"]))
+    rows = []
+    for r in sorted_results:
+        rating_display = str(r["rating"]) if r["rating"] > 0 else "N/A"
+        rows.append(
+            f"| {r['ticker']:<6} | {rating_display:<6} | {r['tweets']:<6} | {r['key_note']} |"
+        )
+    table = "\n".join(rows)
+    ticker_list = ", ".join(tickers)
+    return (
+        f"---\n"
+        f"date: {date_str}\n"
+        f"tickers: {ticker_list}\n"
+        f"---\n\n"
+        f"# X Sentiment Scan — Phase 3 Candidates ({date_str})\n\n"
+        f"> Search: `$TICKER (bullish OR bearish OR \"strong buy\" OR \"loading up\" "
+        f"OR dumping OR \"big catalyst\") min_faves:50 min_retweets:10` — last 30 days\n\n"
+        f"| Ticker | Rating | Tweets | Key Note |\n"
+        f"|--------|--------|--------|----------|\n"
+        f"{table}\n"
+    )
 
 
 async def run_sentiment(
