@@ -79,3 +79,47 @@ def test_classify_tweet_mixed_is_neutral():
 def test_classify_tweet_case_insensitive():
     assert classify_tweet("BULLISH on $SBLK") == 1
     assert classify_tweet("BEARISH on $DVA") == -1
+
+
+# ── compute_rating ────────────────────────────────────────────────────────────
+
+def _tweet(text, likes=100, retweets=20):
+    return {"text": text, "likes": likes, "retweets": retweets}
+
+
+def test_compute_rating_low_visibility():
+    tweets = [_tweet("bullish $SBLK"), _tweet("buy $SBLK")]
+    rating, count, note = compute_rating(tweets)
+    assert rating == 3
+    assert count == 2
+    assert note == "Low X visibility"
+
+
+def test_compute_rating_strongly_bullish():
+    tweets = [_tweet("bullish strong buy catalyst $URI", likes=500)] * 10
+    rating, count, note = compute_rating(tweets)
+    assert rating == 5
+    assert count == 10
+
+
+def test_compute_rating_strongly_bearish():
+    tweets = [_tweet("bearish dumping breakdown $DVA", likes=500)] * 10
+    rating, count, note = compute_rating(tweets)
+    assert rating == 1
+
+
+def test_compute_rating_mixed_neutral():
+    bullish = [_tweet("bullish $X", likes=100)] * 5
+    bearish = [_tweet("bearish $X", likes=100)] * 5
+    rating, count, note = compute_rating(bullish + bearish)
+    assert rating == 3
+
+
+def test_compute_rating_key_note_is_highest_engagement():
+    low = _tweet("bullish $X", likes=50, retweets=10)
+    high = _tweet("Strong buy $X catalyst", likes=800, retweets=200)
+    neutral = _tweet("$X quiet", likes=60, retweets=5)
+    rating, count, note = compute_rating([low, high, neutral])
+    assert "Strong buy $X catalyst" in note
+    assert "800♥" in note
+    assert "200🔁" in note

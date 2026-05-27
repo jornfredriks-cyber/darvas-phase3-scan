@@ -58,7 +58,34 @@ def classify_tweet(text: str) -> int:
 
 
 def compute_rating(tweets: list[dict]) -> tuple[int, int, str]:
-    pass
+    if len(tweets) < 3:
+        return 3, len(tweets), "Low X visibility"
+
+    weighted_score = 0
+    total_weight = 0
+    for t in tweets:
+        classification = classify_tweet(t["text"])
+        weighted_score += classification * t["likes"]
+        total_weight += t["likes"]
+
+    net = weighted_score / total_weight if total_weight > 0 else 0.0
+
+    if net >= 0.6:
+        rating = 5
+    elif net >= 0.3:
+        rating = 4
+    elif net > -0.3:
+        rating = 3
+    elif net > -0.6:
+        rating = 2
+    else:
+        rating = 1
+
+    best = max(tweets, key=lambda t: t["likes"] + 2 * t["retweets"])
+    snippet = best["text"].replace("\n", " ")[:120]
+    key_note = f'"{snippet}" ({best["likes"]}♥ {best["retweets"]}🔁)'
+
+    return rating, len(tweets), key_note
 
 
 def build_markdown(results: list[dict], date_str: str, tickers: list[str]) -> str:
