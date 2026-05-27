@@ -15,6 +15,13 @@ try:
 except ImportError:
     pass
 
+try:
+    from x_sentiment import run_sentiment as _run_sentiment
+    import asyncio as _asyncio
+    _SENTIMENT_AVAILABLE = True
+except ImportError:
+    _SENTIMENT_AVAILABLE = False
+
 
 class _Tee:
     """Writes to both the terminal and a log file simultaneously."""
@@ -39,6 +46,10 @@ HISTORY_PERIOD = "1y"  # how much OHLC history to pull per ticker
 FETCH_CHUNK_SIZE = 50  # yfinance symbols per request; keeps large screener exports stable
 FETCH_RETRIES = 2
 FETCH_RETRY_DELAY = 2.0
+SENTIMENT_OUTPUT_DIR = (
+    "/Users/jamesblond/Documents/2-Areas/Finans/Aksjer"
+    "/Breakout Strategy Daily/X Research Phase3 Candidates"
+)
 
 
 def find_latest_csv(folder: str) -> str:
@@ -335,6 +346,11 @@ def _run(folder: str):
         with open(out_path, "w") as f:
             f.write("\n".join(candidates))
         print(f"Saved → {out_name}")
+        if _SENTIMENT_AVAILABLE:
+            print("\nRunning X sentiment scan…")
+            _asyncio.run(_run_sentiment(out_path, SENTIMENT_OUTPUT_DIR))
+        else:
+            print("\n[x_sentiment] Not available — run x_sentiment.py separately.")
     else:
         print("No Phase 3 candidates found.")
 
