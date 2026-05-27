@@ -1,0 +1,8 @@
+x_cookies.json
+*.db
+__pycache__/
+venv/
+*.pyc
+scan_log_*.txt
+phase3_*.txt
+DARVAS Raw Screener*.csv

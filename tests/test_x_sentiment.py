@@ -191,8 +191,7 @@ async def test_run_sentiment_writes_markdown(tmp_path):
             yield mock_tweet
 
     mock_api = MagicMock()
-    mock_api.pool.add_account = AsyncMock()
-    mock_api.pool.login_all = AsyncMock()
+    mock_api.pool.add_account_cookies = AsyncMock()
     mock_api.search = mock_search
 
     with patch("x_sentiment.twscrape.API", return_value=mock_api):

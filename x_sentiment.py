@@ -15,10 +15,10 @@ OUTPUT_DIR = (
 COOKIES_PATH = os.path.join(SCAN_DIR, "x_cookies.json")
 
 BULLISH_TERMS = frozenset(
-    {"bullish", "strong buy", "loading up", "upgrade", "breakout", "catalyst", "buy"}
+    {"bullish", "strong buy", "loading up", "upgrade", "breakout", "catalyst"}
 )
 BEARISH_TERMS = frozenset(
-    {"bearish", "dumping", "strong sell", "downgrade", "breakdown", "short"}
+    {"bearish", "dumping", "strong sell", "downgrade", "breakdown"}
 )
 
 
@@ -26,7 +26,7 @@ def find_latest_phase3(folder: str) -> str:
     files = glob.glob(os.path.join(folder, "phase3_*.txt"))
     if not files:
         raise FileNotFoundError(f"No phase3_*.txt found in {folder}")
-    return max(files, key=os.path.getmtime)
+    return max(files, key=os.path.basename)
 
 
 def parse_phase3_file(path: str) -> tuple[list[str], str]:
@@ -134,13 +134,8 @@ async def run_sentiment(
 
     api = twscrape.API()
     try:
-        await api.pool.add_account(
-            username="user",
-            password="pass",
-            email="user@example.com",
-            cookies=f"auth_token={cookies['auth_token']}; ct0={cookies['ct0']}",
-        )
-        await api.pool.login_all()
+        cookie_str = f"auth_token={cookies['auth_token']}; ct0={cookies['ct0']}"
+        await api.pool.add_account_cookies("x_default", cookie_str)
     except Exception as e:
         print(f"[x_sentiment] Auth error: {e}")
         return
@@ -181,3 +176,7 @@ async def run_sentiment(
 def main() -> None:
     phase3_path = find_latest_phase3(SCAN_DIR)
     asyncio.run(run_sentiment(phase3_path, OUTPUT_DIR))
+
+
+if __name__ == "__main__":
+    main()
