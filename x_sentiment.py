@@ -46,21 +46,25 @@ def parse_phase3_file(path: str) -> tuple[list[str], str]:
     return tickers, date_str
 
 
-def classify_tweet(tweet_text: str) -> str:
-    """Classify tweet sentiment as bullish, bearish, or neutral."""
+def classify_tweet(text: str) -> int:
     pass
 
 
-def compute_rating(bullish_count: int, bearish_count: int, neutral_count: int) -> float:
-    """Compute sentiment rating from counts."""
+def compute_rating(tweets: list[dict]) -> tuple[int, int, str]:
     pass
 
 
-def build_markdown(ticker: str, rating: float, tweets: list[dict]) -> str:
-    """Build markdown report for a ticker."""
+def build_markdown(results: list[dict], date_str: str, tickers: list[str]) -> str:
     pass
 
 
-async def run_sentiment():
-    """Main async function to run X sentiment scan."""
+async def run_sentiment(
+    phase3_path: str,
+    output_dir: str,
+    cookies_path: str | None = None,
+) -> None:
+    pass
+
+
+def main() -> None:
     pass
