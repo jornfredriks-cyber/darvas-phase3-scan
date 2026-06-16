@@ -1,6 +1,6 @@
 ---
 title: "feat: LW Low proximity scanner"
-status: active
+status: completed
 created: 2026-06-16
 type: feat
 ---
