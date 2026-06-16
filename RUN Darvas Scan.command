@@ -5,7 +5,7 @@
 SCRIPT_DIR="/Users/jamesblond/Documents/1-Projects/AI Trade/Darvas Phase3 Scan"
 
 cd "$SCRIPT_DIR"
-python3 darvas_screener.py && venv/bin/python3 darvas_scan.py
+venv/bin/python3 darvas_screener.py && venv/bin/python3 darvas_scan.py
 
 echo ""
 echo "Press any key to close this window..."

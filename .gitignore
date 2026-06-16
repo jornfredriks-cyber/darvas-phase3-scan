@@ -1,4 +1,3 @@
-x_cookies.json
 *.db
 __pycache__/
 venv/
@@ -6,3 +5,5 @@ venv/
 scan_log_*.txt
 phase3_*.txt
 DARVAS Raw Screener*.csv
+
+.compound-engineering/*.local.yaml

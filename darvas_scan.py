@@ -1,3 +1,4 @@
+import configparser
 import glob
 import os
 import sys
@@ -15,14 +16,6 @@ try:
 except ImportError:
     pass
 
-try:
-    from x_sentiment import run_sentiment as _run_sentiment
-    import asyncio as _asyncio
-    _SENTIMENT_AVAILABLE = True
-except ImportError:
-    _SENTIMENT_AVAILABLE = False
-
-
 class _Tee:
     """Writes to both the terminal and a log file simultaneously."""
     def __init__(self, *streams):
@@ -37,19 +30,20 @@ class _Tee:
             s.flush()
 
 
-# ── Parameters (match your TradingView indicator settings) ───────────────────
-MAX_HEIGHT_PCT = 8.0   # max box height as % of floor
-SEED_FLOOR     = False # seed floor with lowest low from Phase 0 — must match indicator (default: false)
-SMA_SHORT      = 20    # SMA trend filter fast period — must match indicator "SMA Short Length"
-SMA_LONG       = 50    # SMA trend filter slow period — must match indicator "SMA Long Length"
-HISTORY_PERIOD = "1y"  # how much OHLC history to pull per ticker
-FETCH_CHUNK_SIZE = 50  # yfinance symbols per request; keeps large screener exports stable
-FETCH_RETRIES = 2
-FETCH_RETRY_DELAY = 2.0
-SENTIMENT_OUTPUT_DIR = (
-    "/Users/jamesblond/Documents/2-Areas/Finans/Aksjer"
-    "/Breakout Strategy Daily/X Research Phase3 Candidates"
-)
+# ── Parameters — loaded from darvas_config.ini, with hardcoded fallbacks ─────
+_cfg = configparser.ConfigParser()
+_cfg.read(os.path.join(os.path.dirname(os.path.abspath(__file__)), "darvas_config.ini"))
+_s = _cfg["scanner"] if "scanner" in _cfg else {}
+
+MAX_HEIGHT_PCT    = float(_s.get("max_height_pct",    5.0))
+CEIL_MAX_DIST_PCT = float(_s.get("ceil_max_dist_pct", 100.0))  # 100 = disabled by default
+SEED_FLOOR        = _s.get("seed_floor",   "true").lower() == "true"
+EMA_SHORT         = int(  _s.get("ema_short",        20))
+EMA_LONG          = int(  _s.get("ema_long",         50))
+HISTORY_PERIOD    =       _s.get("history_period",   "1y")
+FETCH_CHUNK_SIZE  = int(  _s.get("fetch_chunk_size",  50))
+FETCH_RETRIES     = int(  _s.get("fetch_retries",      2))
+FETCH_RETRY_DELAY = float(_s.get("fetch_retry_delay", 2.0))
 
 
 def find_latest_csv(folder: str) -> str:
@@ -159,13 +153,13 @@ def is_phase3(df: pd.DataFrame, max_height: float = MAX_HEIGHT_PCT, seed_floor: 
     Returns (False, None, None, None) otherwise.
 
     State machine phases:
-      0 – hunting for a ceiling candidate
+      0 – hunting for a ceiling candidate (gated by EMA trend filter)
       2 – ceiling confirmed, hunting for floor
       3 – box confirmed and active (what we want)
     """
     close_ser = pd.Series(df["close"].to_numpy())
-    sma20 = close_ser.rolling(SMA_SHORT).mean().to_numpy()
-    sma50 = close_ser.rolling(SMA_LONG).mean().to_numpy()
+    ema20 = close_ser.ewm(span=EMA_SHORT, adjust=False).mean().to_numpy()
+    ema50 = close_ser.ewm(span=EMA_LONG,  adjust=False).mean().to_numpy()
 
     phase = 0
 
@@ -184,33 +178,45 @@ def is_phase3(df: pd.DataFrame, max_height: float = MAX_HEIGHT_PCT, seed_floor: 
         close = row.close
         do_reset = False
 
-        # ── Phase 0: hunt ceiling ────────────────────────────────────────────
+        # ── Phase 0: hunt ceiling (EMA-gated) ───────────────────────────────
         if phase == 0:
-            if ceil_candidate is None or high > ceil_candidate:
-                ceil_candidate    = high
-                ceil_count        = 0
-                lowest_since_ceil = low
+            e20, e50 = ema20[i], ema50[i]
+            ema_bearish = not (pd.isna(e20) or pd.isna(e50)) and e20 < e50
+            if ema_bearish:
+                # EMA bearish — discard partial candidate so it cannot resume
+                # when the trend recovers
+                if ceil_candidate is not None:
+                    ceil_candidate    = None
+                    ceil_count        = 0
+                    lowest_since_ceil = None
             else:
-                if close > ceil_candidate:
-                    # Close breaks above candidate → new candidate
+                if ceil_candidate is None or high > ceil_candidate:
                     ceil_candidate    = high
                     ceil_count        = 0
                     lowest_since_ceil = low
                 else:
-                    # Bar contained below candidate → count it
-                    if lowest_since_ceil is None or low < lowest_since_ceil:
+                    if close > ceil_candidate:
+                        # Close breaks above candidate → new candidate
+                        ceil_candidate    = high
+                        ceil_count        = 0
                         lowest_since_ceil = low
-                    ceil_count += 1
-                    if ceil_count >= 3:
-                        ceil_high   = ceil_candidate
-                        floor_count = 0
-                        # When seedFloor=True the floor search starts from the
-                        # lowest low observed while the ceiling was being confirmed
-                        floor_low = lowest_since_ceil if seed_floor else None
-                        phase = 2
+                    else:
+                        # Bar contained below candidate → count it
+                        if lowest_since_ceil is None or low < lowest_since_ceil:
+                            lowest_since_ceil = low
+                        ceil_count += 1
+                        if ceil_count >= 3:
+                            ceil_high   = ceil_candidate
+                            floor_count = 0
+                            # When seed_floor=True the floor search starts from
+                            # the lowest low observed during ceiling confirmation
+                            floor_low = lowest_since_ceil if seed_floor else None
+                            phase = 2
 
         # ── Phase 2: ceiling confirmed, hunt floor ───────────────────────────
-        elif phase == 2:
+        # 'if' (not 'elif') matches Pine Script: when Phase 0 confirms the ceiling
+        # and sets phase=2 on the same bar, Phase 2 also runs on that bar.
+        if phase == 2:
             if close > ceil_high:
                 # Ceiling pierced → restart
                 ceil_candidate    = high
@@ -227,29 +233,27 @@ def is_phase3(df: pd.DataFrame, max_height: float = MAX_HEIGHT_PCT, seed_floor: 
                 else:
                     floor_count += 1
                     if floor_count >= 3:
-                        box_height = (ceil_high - floor_low) / floor_low * 100
-                        s20, s50 = sma20[i], sma50[i]
-                        trend_ok = not (pd.isna(s20) or pd.isna(s50)) and s20 >= s50
-                        if box_height <= max_height and trend_ok:
+                        box_height = (ceil_high - floor_low) / ceil_high * 100
+                        if box_height <= max_height:
                             confirmed_floor = floor_low
                             phase = 3
                         else:
                             do_reset = True
 
         # ── Phase 3: active box ──────────────────────────────────────────────
-        elif phase == 3:
+        # 'if' (not 'elif') matches Pine Script: when Phase 2 confirms the floor
+        # and sets phase=3 on the same bar, Phase 3 also runs on that bar.
+        if phase == 3:
             if close > ceil_high:
                 # Breakout → not Phase 3 anymore
                 do_reset = True
-            elif low < confirmed_floor and close >= confirmed_floor:
-                # Wick below floor but closes inside → reset floor, back to 2
-                floor_low       = low
-                floor_count     = 0
-                confirmed_floor = None
+            elif low < confirmed_floor:
+                # Floor broken (wick or close) — keep ceiling, hunt new floor
+                floor_low         = low
+                floor_count       = 0
+                confirmed_floor   = None
+                lowest_since_ceil = None
                 phase = 2
-            elif close < confirmed_floor:
-                # Breakdown → reset
-                do_reset = True
 
         if do_reset:
             phase             = 0
@@ -262,7 +266,7 @@ def is_phase3(df: pd.DataFrame, max_height: float = MAX_HEIGHT_PCT, seed_floor: 
             lowest_since_ceil = None
 
     if phase == 3 and ceil_high is not None and confirmed_floor is not None:
-        box_height = (ceil_high - confirmed_floor) / confirmed_floor * 100
+        box_height = (ceil_high - confirmed_floor) / ceil_high * 100
         return True, ceil_high, confirmed_floor, round(box_height, 2)
 
     return False, None, None, None
@@ -289,7 +293,9 @@ def _run(folder: str):
     tv = pd.read_csv(csv_path)
     symbols = tv["Symbol"].dropna().tolist()
     print(f"Tickers loaded: {len(symbols)}")
-    print(f"History period: {HISTORY_PERIOD}  |  Max box height: {MAX_HEIGHT_PCT}%")
+    ceil_dist_str = f"{CEIL_MAX_DIST_PCT}%" if CEIL_MAX_DIST_PCT < 100 else "off"
+    print(f"History period: {HISTORY_PERIOD}  |  Max box height: {MAX_HEIGHT_PCT}%  |  Ceil proximity: {ceil_dist_str}")
+    print(f"EMA filter    : EMA{EMA_SHORT} > EMA{EMA_LONG} (gates Phase 0)")
     print(f"Fetch mode    : yfinance bulk chunks of {FETCH_CHUNK_SIZE}\n")
 
     candidates = []
@@ -327,6 +333,12 @@ def _run(folder: str):
             in_p3, ceil, floor, height = is_phase3(df)
 
             if in_p3:
+                if CEIL_MAX_DIST_PCT < 100:
+                    high_52w = df["high"].max()
+                    ceil_dist = (high_52w - ceil) / high_52w * 100
+                    if ceil_dist > CEIL_MAX_DIST_PCT:
+                        print(f"  [{i:3d}/{len(symbols)}] {sym:10s}  — ceil {ceil_dist:.1f}% below 52W high")
+                        continue
                 candidates.append(sym)
                 print(f"  [{i:3d}/{len(symbols)}] {sym:10s}  PHASE 3  box {floor:.2f}–{ceil:.2f}  ({height:.1f}%)")
             else:
@@ -346,11 +358,6 @@ def _run(folder: str):
         with open(out_path, "w") as f:
             f.write("\n".join(candidates))
         print(f"Saved → {out_name}")
-        if _SENTIMENT_AVAILABLE:
-            print("\nRunning X sentiment scan…")
-            _asyncio.run(_run_sentiment(out_path, SENTIMENT_OUTPUT_DIR))
-        else:
-            print("\n[x_sentiment] Not available — run x_sentiment.py separately.")
     else:
         print("No Phase 3 candidates found.")
 

@@ -1,11 +1,28 @@
+import configparser
 import io
 import os
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import pandas as pd
 import requests
 import yfinance as yf
+
+class _Tee:
+    """Writes to both the terminal and a log file simultaneously."""
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self._streams:
+            s.flush()
+
 
 try:
     import certifi
@@ -14,20 +31,23 @@ try:
 except ImportError:
     pass
 
-# ── Screener parameters (match TradingView settings) ────────────────────────
-MIN_PRICE        = 5.0
-MIN_MARKET_CAP   = 500_000_000    # 500 M USD
-MIN_AVG_VOL_30D  = 500_000
-MIN_ADR_PCT      = 2.0            # 14-day average daily range %
-EMA_FAST         = 50
-EMA_SLOW         = 200
-RSI_LOW          = 45
-RSI_HIGH         = 75
-ATH_MAX_DIST_PCT = 5.0            # price must be within 5 % of the 52-week high
-                                   # (proxy for true ATH — adequate for Phase-3 setups)
-HISTORY_PERIOD   = "1y"
-FETCH_CHUNK_SIZE = 50
-INTER_CHUNK_DELAY = 1.0
+# ── Screener parameters — loaded from darvas_config.ini, with hardcoded fallbacks
+_cfg = configparser.ConfigParser()
+_cfg.read(os.path.join(os.path.dirname(os.path.abspath(__file__)), "darvas_config.ini"))
+_s = _cfg["screener"] if "screener" in _cfg else {}
+
+MIN_PRICE        = float(_s.get("min_price",         5.0))
+MIN_MARKET_CAP   = int(  _s.get("min_market_cap",    500_000_000))
+MIN_AVG_VOL_30D  = int(  _s.get("min_avg_vol_30d",   500_000))
+MIN_ADR_PCT      = float(_s.get("min_adr_pct",       2.0))
+EMA_FAST         = int(  _s.get("ema_fast",          50))
+EMA_SLOW         = int(  _s.get("ema_slow",          200))
+RSI_LOW          = float(_s.get("rsi_low",           45))
+RSI_HIGH         = float(_s.get("rsi_high",          75))
+ATH_MAX_DIST_PCT = float(_s.get("ath_max_dist_pct",  5.0))
+HISTORY_PERIOD   =       _s.get("history_period",    "1y")
+FETCH_CHUNK_SIZE = int(  _s.get("fetch_chunk_size",  50))
+INTER_CHUNK_DELAY= float(_s.get("inter_chunk_delay", 1.0))
 
 NASDAQ_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 NYSE_URL   = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
@@ -152,27 +172,27 @@ def _adr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) ->
     return float(((high - low) / close * 100).tail(period).mean())
 
 
-def _passes(df: pd.DataFrame) -> bool:
+def _passes(df: pd.DataFrame) -> tuple[bool, str]:
     if len(df) < EMA_SLOW + 10:
-        return False
+        return False, "bars"
     c, h, l, v = df["close"], df["high"], df["low"], df["volume"]
 
     if float(c.iloc[-1]) < MIN_PRICE:
-        return False
+        return False, "price"
     if float(v.tail(30).mean()) < MIN_AVG_VOL_30D:
-        return False
+        return False, "volume"
     if _ema(c, EMA_FAST).iloc[-1] <= _ema(c, EMA_SLOW).iloc[-1]:
-        return False
+        return False, "ema"
     if _adr(h, l, c) < MIN_ADR_PCT:
-        return False
+        return False, "adr"
     rsi = _rsi(c)
     if not (RSI_LOW <= rsi <= RSI_HIGH):
-        return False
+        return False, "rsi"
     ath  = float(c.max())
     dist = (ath - float(c.iloc[-1])) / ath * 100
     if not (0.0 <= dist <= ATH_MAX_DIST_PCT):
-        return False
-    return True
+        return False, "ath"
+    return True, "ok"
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -203,22 +223,39 @@ def run_screener(output_folder: str | None = None) -> str:
 
     # 3. Technical filters (in-memory, fast)
     print("[3/4] Applying technical filters…")
-    passed = [sym for sym, df in ohlc.items() if _passes(df)]
-    print(f"  {len(passed)} pass price / volume / EMA / ADR / RSI / ATH\n")
+    passed = []
+    rejected: dict[str, int] = {}
+    for sym, df in ohlc.items():
+        ok, reason = _passes(df)
+        if ok:
+            passed.append(sym)
+        else:
+            rejected[reason] = rejected.get(reason, 0) + 1
+    print(f"  {len(passed)} pass all filters")
+    for reason, count in sorted(rejected.items(), key=lambda x: -x[1]):
+        print(f"  {count:5d} rejected by {reason}")
+    print()
 
     # 4. Market cap (individual calls only on the small passing set)
     print(f"[4/4] Fetching market cap for {len(passed)} candidates…")
-    final: list[str] = []
-    for i, sym in enumerate(passed, 1):
-        time.sleep(0.3)
+
+    def _fetch_mcap(sym: str) -> tuple[str, float | None]:
         try:
-            mcap = yf.Ticker(sym).fast_info.market_cap
-            if mcap and mcap >= MIN_MARKET_CAP:
-                final.append(sym)
+            return sym, yf.Ticker(sym).fast_info.market_cap
         except Exception:
-            pass
-        if i % 25 == 0:
-            print(f"  …{i}/{len(passed)} checked, {len(final)} qualifying so far")
+            return sym, None
+
+    mcap_map: dict[str, float | None] = {}
+    checked = 0
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for sym, mcap in executor.map(_fetch_mcap, passed):
+            checked += 1
+            mcap_map[sym] = mcap
+            if checked % 25 == 0:
+                qualifying = sum(1 for m in mcap_map.values() if m and m >= MIN_MARKET_CAP)
+                print(f"  …{checked}/{len(passed)} checked, {qualifying} qualifying so far")
+
+    final = [sym for sym in passed if mcap_map.get(sym) and mcap_map[sym] >= MIN_MARKET_CAP]
     print(f"  {len(final)} pass market cap >{MIN_MARKET_CAP / 1e6:.0f}M\n")
 
     # Save
@@ -229,5 +266,18 @@ def run_screener(output_folder: str | None = None) -> str:
     return out_path
 
 
+def main():
+    folder   = os.path.dirname(os.path.abspath(__file__))
+    log_path = os.path.join(folder, f"screener_log_{date.today()}.txt")
+    log_file = open(log_path, "w", buffering=1)
+    sys.stdout = _Tee(sys.__stdout__, log_file)
+    try:
+        run_screener(folder)
+    finally:
+        sys.stdout = sys.__stdout__
+        log_file.close()
+        print(f"Screener log → {os.path.basename(log_path)}")
+
+
 if __name__ == "__main__":
-    run_screener()
+    main()
