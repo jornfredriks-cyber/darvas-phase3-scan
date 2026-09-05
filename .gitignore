@@ -7,3 +7,8 @@ phase3_*.txt
 DARVAS Raw Screener*.csv
 
 .compound-engineering/*.local.yaml
+.DS_Store
+LW_Low_*.txt
+lw_low_scan_log_*.txt
+screener_log_*.txt
+DARVAS Raw Screener*.txt
